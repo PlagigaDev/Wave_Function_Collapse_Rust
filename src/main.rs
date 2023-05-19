@@ -1,55 +1,40 @@
+pub mod tile;
+
 use std::collections::HashMap;
 use std::fs;
-use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba, RgbaImage};
+use image::{DynamicImage, GenericImageView, ImageBuffer};
+use image::imageops::FilterType;
+use rand::Rng;
+use tile::Tile;
+
 
 const TILE_PATH: &str = "./tiles/demo-tracks";
 
-const DIM: usize = 2;
+const DIM: usize = 10;
+const IMAGE_PIXEL_SIZE: usize = 2000;
+const MAX_SIZE: usize = usize::MAX;
 
 
-
-enum Tiles{
-    BLANK = 0,
-    UP = 1,
-    RIGHT = 2,
-    DOWN = 3,
-    LEFT = 4,
-}
-
-impl Tiles{
-    pub fn from_str(str: &str) -> Option<Self> {
-        match str.to_uppercase().as_str() {
-            "BLANK" => Some(Tiles::BLANK),
-            "UP" => Some(Tiles::UP),
-            "Right" => Some(Tiles::RIGHT),
-            "DOWN" => Some(Tiles::DOWN),
-            "LEFT" => Some(Tiles::LEFT),
-            _ => None
-        }
-    }
-}
- 
-
-
+#[derive(Debug, Clone)]
 struct GridCell{
     pub collapsed: bool,
-    pub options: Vec<Tiles>
+    pub options: Vec<usize>
 }
 
 impl GridCell{
-    pub fn new() -> Self{
+    pub fn new(max_options: usize) -> Self{
         GridCell{ 
             collapsed: false,
-            options: Vec::from([Tiles::BLANK,Tiles::UP,Tiles::RIGHT,Tiles::DOWN,Tiles::LEFT])
+            options: (0..max_options).collect(),
         }
     }
 }
 
-fn load_images(directory_path: &str) -> HashMap<String, image::DynamicImage> {
-    let mut images_map: HashMap<String, image::DynamicImage> = HashMap::new();
+fn load_images(directory_path: &str) -> Vec<Tile> {
+    let mut images_map: Vec<Tile> = Vec::new();
 
     // Read the directory contents
-    if let Ok(entries) = fs::read_dir(directory_path) {
+    /*if let Ok(entries) = fs::read_dir(directory_path) {
         for entry in entries {
             if let Ok(entry) = entry {
                 if let Ok(file_type) = entry.file_type() {
@@ -57,15 +42,30 @@ fn load_images(directory_path: &str) -> HashMap<String, image::DynamicImage> {
                         if let Some(file_name) = entry.file_name().to_str() {
                             // Load the image file
                             if let Ok(image) = image::open(entry.path()) {
-                                images_map.insert(file_name.replace(".png", "").to_owned(), image);
+                                let image_size = IMAGE_PIXEL_SIZE/DIM;
+                                let image = image.resize(image_size as u32,image_size as u32, FilterType::Nearest);
+                                images_map.insert(TileType::from_str(file_name.replace(".png", "").trim()).unwrap(), Tile::from(image));
                             }
                         }
                     }
                 }
             }
         }
-    }
+    }*/
+    let image_size = IMAGE_PIXEL_SIZE/DIM;
 
+    let blank = Tile::from(image::open(directory_path.to_owned()+"/blank.png").expect("Failed to load image").resize(image_size as u32,image_size as u32, FilterType::Nearest), vec![0,0,0,0]);
+    let up = Tile::from(image::open(directory_path.to_owned()+"/up.png").expect("Failed to load image").resize(image_size as u32,image_size as u32, FilterType::Nearest), vec![1,1,0,1]);
+    let left = up.get_rotated90();
+    let down = up.get_rotated180();
+    let right = up.get_rotated270();
+    
+    images_map.push(blank);
+    images_map.push(up);
+    images_map.push(left);
+    images_map.push(down);
+    images_map.push(right);
+    
     images_map
 }
 
@@ -89,7 +89,6 @@ fn combine_images(images: &Vec<DynamicImage>) -> Option<DynamicImage> {
     let mut combined_image = ImageBuffer::new(combined_width as u32, combined_height as u32);
 
     for (i, img) in images.iter().enumerate() {
-        let (width, height) = img.dimensions();
         let col = i % column_count;
         let row = i / column_count;
         let x_offset = col * max_width;
@@ -103,33 +102,55 @@ fn combine_images(images: &Vec<DynamicImage>) -> Option<DynamicImage> {
     Some(DynamicImage::ImageRgba8(combined_image))
 }
 
-fn get_image_que(grid: &Vec<GridCell>) -> Vec<DynamicImage>{
-    let mut image_que: Vec<DynamicImage> = Vec::new();
-    for x in 0..DIM{
-        for y in 0..DIM{
-            let cell = match grid.get(y + x*DIM){
-                Some(grid_cell) => grid_cell,
-                None => continue,
-            };
-            if cell.collapsed{
-                let index = cell.options.get(0).unwrap();
-                //image_que.
-            }
+fn get_random_tile(options: &mut Vec<usize>){
+    let mut rand = rand::thread_rng();
+    let random_option = rand.gen_range(0..options.len());
+    let mut new_vec: Vec<usize> = Vec::new();
+    new_vec.insert(0, options[random_option].clone());
+    *options = new_vec;
+}
+
+fn collapse_lowest_entropy(grid: &mut Vec<GridCell>){
+    let lowest_entropy_value = grid.iter().map(|cell| {
+        if cell.collapsed{
+            return MAX_SIZE;
         }
-    }
-    image_que
+        return cell.options.len();
+    })
+    .min()
+    .unwrap();
+    
+    let mut lowest_entropy_cells: Vec<&mut GridCell> = grid.iter_mut().filter(|cell| cell.options.len() == lowest_entropy_value).collect();
+    
+    let mut rand = rand::thread_rng();
+    let random_cell = rand.gen_range(0..lowest_entropy_cells.len());
+
+    let current_cell: &mut GridCell = lowest_entropy_cells[random_cell];
+    current_cell.collapsed = true;
+    get_random_tile(&mut current_cell.options);
+}
+
+fn get_image_que(grid: &mut Vec<GridCell>, tiles: &Vec<Tile>) -> Vec<DynamicImage>{
+
+    (0..(DIM*DIM)).for_each(|_| collapse_lowest_entropy(grid));
+
+    grid.iter().map(|cell| tiles.get(*cell.options.get(0).unwrap()).unwrap().get_image()).collect()
 }
 
 fn main() {
     let mut grid: Vec<GridCell> = Vec::new();
+    
+    let mut tiles = load_images(TILE_PATH);
 
     for i in 0..(DIM*DIM){
-        grid.insert(i, GridCell::new());
+        grid.insert(i, GridCell::new(tiles.len()));
     }
-
-    let images = load_images(TILE_PATH);
-
-    let vec: Vec<DynamicImage> = images.values().cloned().collect();
+    
+    let tiles_clone = tiles.clone();
+    tiles.iter_mut().for_each(|tile| tile.analyze(&tiles_clone));
+   
+    
+    let vec: Vec<DynamicImage> = get_image_que(&mut grid, &tiles);
 
     let result_image = combine_images(&vec).unwrap();
 
