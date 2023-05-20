@@ -1,112 +1,41 @@
 pub mod tile;
+pub mod images;
 
-use std::collections::HashMap;
-use std::fs;
-use image::{DynamicImage, GenericImageView, ImageBuffer};
-use image::imageops::FilterType;
+use image::DynamicImage;
 use rand::Rng;
 use tile::Tile;
-
+use images::{combine_images, load_images, DIM};
 
 const TILE_PATH: &str = "./tiles/demo-tracks";
 
-const DIM: usize = 10;
-const IMAGE_PIXEL_SIZE: usize = 2000;
 const MAX_SIZE: usize = usize::MAX;
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 struct GridCell{
     pub collapsed: bool,
+    pub id: usize,
     pub options: Vec<usize>
 }
 
 impl GridCell{
-    pub fn new(max_options: usize) -> Self{
+    pub fn new(id: usize, max_options: usize) -> Self{
         GridCell{ 
             collapsed: false,
+            id: id,
             options: (0..max_options).collect(),
         }
     }
 }
 
-fn load_images(directory_path: &str) -> Vec<Tile> {
-    let mut images_map: Vec<Tile> = Vec::new();
-
-    // Read the directory contents
-    /*if let Ok(entries) = fs::read_dir(directory_path) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        if let Some(file_name) = entry.file_name().to_str() {
-                            // Load the image file
-                            if let Ok(image) = image::open(entry.path()) {
-                                let image_size = IMAGE_PIXEL_SIZE/DIM;
-                                let image = image.resize(image_size as u32,image_size as u32, FilterType::Nearest);
-                                images_map.insert(TileType::from_str(file_name.replace(".png", "").trim()).unwrap(), Tile::from(image));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }*/
-    let image_size = IMAGE_PIXEL_SIZE/DIM;
-
-    let blank = Tile::from(image::open(directory_path.to_owned()+"/blank.png").expect("Failed to load image").resize(image_size as u32,image_size as u32, FilterType::Nearest), vec![0,0,0,0]);
-    let up = Tile::from(image::open(directory_path.to_owned()+"/up.png").expect("Failed to load image").resize(image_size as u32,image_size as u32, FilterType::Nearest), vec![1,1,0,1]);
-    let left = up.get_rotated90();
-    let down = up.get_rotated180();
-    let right = up.get_rotated270();
-    
-    images_map.push(blank);
-    images_map.push(up);
-    images_map.push(left);
-    images_map.push(down);
-    images_map.push(right);
-    
-    images_map
-}
-
-fn combine_images(images: &Vec<DynamicImage>) -> Option<DynamicImage> {
-    let mut widths: Vec<usize> = Vec::new();
-    let mut heights: Vec<usize> = Vec::new();
-
-    // Calculate the total width and height of the combined image
-    for img in images {
-        let (width, height) = img.dimensions();
-        widths.push(width as usize);
-        heights.push(height as usize);
-    }
-
-    let max_width = *widths.iter().max().unwrap_or(&0);
-    let max_height = *heights.iter().max().unwrap_or(&0);
-    let column_count = DIM;
-    let row_count = (images.len() as f64 / column_count as f64).ceil() as usize;
-    let combined_width = max_width * column_count;
-    let combined_height = max_height * row_count;
-    let mut combined_image = ImageBuffer::new(combined_width as u32, combined_height as u32);
-
-    for (i, img) in images.iter().enumerate() {
-        let col = i % column_count;
-        let row = i / column_count;
-        let x_offset = col * max_width;
-        let y_offset = row * max_height;
-
-        for (x, y, pixel) in img.pixels() {
-            combined_image.put_pixel(x + x_offset as u32, y + y_offset as u32, pixel);
-        }
-    }
-
-    Some(DynamicImage::ImageRgba8(combined_image))
-}
-
 fn get_random_tile(options: &mut Vec<usize>){
+    
     let mut rand = rand::thread_rng();
     let random_option = rand.gen_range(0..options.len());
     let mut new_vec: Vec<usize> = Vec::new();
+    
     new_vec.insert(0, options[random_option].clone());
+    
     *options = new_vec;
 }
 
@@ -119,41 +48,89 @@ fn collapse_lowest_entropy(grid: &mut Vec<GridCell>){
     })
     .min()
     .unwrap();
-    
-    let mut lowest_entropy_cells: Vec<&mut GridCell> = grid.iter_mut().filter(|cell| cell.options.len() == lowest_entropy_value).collect();
-    
+
+    let mut lowest_entropy_cells: Vec<&mut GridCell> = grid.iter_mut().filter(|cell| !cell.collapsed && cell.options.len() == lowest_entropy_value).collect();
+
     let mut rand = rand::thread_rng();
     let random_cell = rand.gen_range(0..lowest_entropy_cells.len());
 
-    let current_cell: &mut GridCell = lowest_entropy_cells[random_cell];
+    let mut current_cell: &mut GridCell = &mut lowest_entropy_cells[random_cell];
     current_cell.collapsed = true;
+    
     get_random_tile(&mut current_cell.options);
+}
+
+fn update_grid(grid: &mut Vec<GridCell>, tiles: &Vec<Tile>){
+    for index in 0..(DIM*DIM) {
+        if grid[index].collapsed { continue; }
+
+        let y_index = index/DIM;
+        let x_index = index%DIM;
+
+        let mut options: Vec<usize> = (0..tiles.len()).collect();
+        
+        //Look up
+        if y_index > 0 {
+            let up = &grid[x_index + (y_index-1) * DIM];
+            let mut valid: Vec<usize> = Vec::new();
+            up.options.iter().for_each(|option| valid.append(&mut tiles[*option].edges.down.clone()));
+            options.retain(|tile_value| valid.iter().find(|valid_tile| *tile_value == **valid_tile).is_some());
+        }
+        
+        //Look right
+        if x_index < DIM-1 {
+            let right = &grid[index + 1];
+            let mut valid: Vec<usize> = Vec::new();
+            right.options.iter().for_each(|option| valid.append(&mut tiles[*option].edges.left.clone()));
+            options.retain(|tile_value| valid.iter().find(|valid_tile| *tile_value == **valid_tile).is_some());
+        }
+
+        //Look down
+        if y_index < DIM-1 {
+            let down = &grid[x_index + (y_index+1) * DIM];
+            let mut valid: Vec<usize> = Vec::new();
+            down.options.iter().for_each(|option| valid.append(&mut tiles[*option].edges.up.clone()));
+            options.retain(|tile_value| valid.iter().find(|valid_tile| *tile_value == **valid_tile).is_some());
+        }
+        //Look left
+        if x_index > 0 {
+            let lef = &grid[index - 1];
+            let mut valid: Vec<usize> = Vec::new();
+            lef.options.iter().for_each(|option| valid.append(&mut tiles[*option].edges.right.clone()));
+            options.retain(|tile_value| valid.iter().find(|valid_tile| *tile_value == **valid_tile).is_some());
+        }
+
+        grid[index].options = options;
+
+    }
+    
 }
 
 fn get_image_que(grid: &mut Vec<GridCell>, tiles: &Vec<Tile>) -> Vec<DynamicImage>{
 
-    (0..(DIM*DIM)).for_each(|_| collapse_lowest_entropy(grid));
-
-    grid.iter().map(|cell| tiles.get(*cell.options.get(0).unwrap()).unwrap().get_image()).collect()
+    for _ in 0..(DIM*DIM) {
+        collapse_lowest_entropy(grid);
+        update_grid( grid, tiles);
+    }
+    grid.iter().map(|cell| tiles.get(*cell.options.get(0).clone().unwrap()).unwrap().get_image()).collect()
 }
 
 fn main() {
     let mut grid: Vec<GridCell> = Vec::new();
     
     let mut tiles = load_images(TILE_PATH);
-
+    
     for i in 0..(DIM*DIM){
-        grid.insert(i, GridCell::new(tiles.len()));
+        grid.insert(i, GridCell::new(i, tiles.len()));
     }
     
-    let tiles_clone = tiles.clone();
+    let tiles_clone: Vec<Tile> = tiles.clone();
     tiles.iter_mut().for_each(|tile| tile.analyze(&tiles_clone));
-   
-    
+
     let vec: Vec<DynamicImage> = get_image_que(&mut grid, &tiles);
 
     let result_image = combine_images(&vec).unwrap();
-
+    
     // Save the result image to a file
     result_image.save("result_image.png").expect("Failed to save image.");
 }
