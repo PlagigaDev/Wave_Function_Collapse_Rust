@@ -1,4 +1,4 @@
-# wave_function_collapse
+# Wave_Function_Collapse_Rust
 An implementation of the Wave-Function-Collapse algorithm in rust
 
 Heavily inspired by CodingTrains Wave-Function-Collapse
